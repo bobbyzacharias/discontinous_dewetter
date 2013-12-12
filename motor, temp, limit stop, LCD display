@@ -1,0 +1,231 @@
+/* 
+
+there's a pushbutton on digital 2, and a small potentiometer on A0. 
+
+when the pushbutton is pushed, the motor switches from clockwise
+to counterclockwise, or vice versa.
+
+when the pot on A0 is adjusted, it varies the motor speed from 1 to 10 rpm.
+
+I can't get it go much faster than 10. Around there, the curve starts to slow down a lot.
+
+I'd also like to call the release() command to get the motor to release on a
+third button push, but keep getting an error when I try to implement it.
+
+the button *definitely* needs debouncing, also.
+
+12/6/13, trying to do the e-stop button that way* didn't work, now I'm using an interrupt
+on pin 2 (which is interrupt "pin 0") which calls stopper() when that pin gets a digital LOW.
+stopper() is just an infinite loop to tie the machine up from doing anything else.
+*"that way" means by wrapping the whole void loop() in a while() statement that required the
+emergency stop button to be high or low. For whatever reason, that didn't do the trick.
+
+12/9/13, inserting Jeremy Blum's debounce() to try to make the button work better (and for
+use with more buttons when they arrive tomorrow)
+
+also, today I should try to put in code to prepare for a 1-step and a 10-step increment 
+and decrement button for temperature and speed, since that's how I plan to add those on
+to the hardware configuration
+
+12/11/13, added the LCD display, which works but interrupts the motor commands, leading to 
+inconsistent drving. Added the thermometer and it works. (First thermometer seemed to work
+fine but then reported temperatures about 10ºC lower than they actually were.)
+
+Limit switches work, mostly. There is still a delay as they somehow don't fully interrupt
+one of the motor steps, which can mean that the switches get a little mashed on before 
+finally stopping the motor. I thought the whole point of the interrupt was to fix this
+but it apparently can't interrupt some things? Idea: make the interrupt turn off pins A4
+and A5, this way the motor shield absolutely can't get any information telling the motor
+to continue? Will try that now. (Also note the LCD will go blank I believe, but that's fine.)
+
+Actually that didn't work at all. Now the limit stop doesn't do *anything*, somehow.
+
+Time to go have dinner! It's 9:53pm.
+
+*/
+
+
+
+#include <Wire.h>
+#include <Adafruit_MotorShield.h>
+#include <Adafruit_RGBLCDShield.h>
+
+Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
+
+Adafruit_MotorShield AFMS = Adafruit_MotorShield(); 
+
+Adafruit_StepperMotor *myMotor = AFMS.getStepper(200, 1);
+
+#define RED 0x1
+#define aref_voltage 5.0
+
+const int estopPin = 2;
+
+const int  buttonPin = 4;
+
+boolean lastButton = LOW;
+boolean currentButton = LOW;
+
+int buttonPushCounter = 0;   // counter for the number of button presses
+int buttonState = 0;         // current state of the button
+int lastButtonState = 0;
+
+int tempPin = A3;
+
+/* button variables below: raisetemp1 will raise the temp setpoint by 1ºC, lowertemp1 will lower it by 1ºC.
+Shift button will change the step value to make it 10 times greater (sort of fast forward)
+
+const int TEMPUPBUTTON = whatever pin;
+const int TEMPDOWNBUTTON = whatever pin;
+const int SPEEDUPBUTTON = whatever pin;
+const int SPEEDDOWNBUTTON = whatever pin;
+
+boolean lastraisetemp1button = LOW;
+boolean currraisetemp1button = LOW;
+boolean lastlowertemp1button = LOW;
+boolean currlowertemp1button = LOW;
+boolean lastriasespeed1button = LOW;
+boolean currrasisespeed1button = LOW;
+boolean lastshiftbutton = LOW;
+boolean currshiftbutton = LOW;
+
+*/
+
+int speedPin = A0;
+int sensorValue = 1;
+
+
+
+
+//debounce() from Jeremy Blum's book, p. 213:
+
+boolean debounce(boolean last, int genericpin) 
+  {
+    boolean current = digitalRead (genericpin);
+    if (last != current)
+      {
+         delay (20); //**MAYBE REPLACE THIS DELAY WITH A TIMER INSTEAD TO KEEP THINGS FLOWING? No, it's probably ok to leave the delay because it will only invoke if it detects a state change, which won't happen much
+         current = digitalRead (genericpin);
+      }
+    return current;
+  }
+  
+void stopper()
+{
+//  while ( true )
+  digitalWrite(13, HIGH);
+  pinMode(A4, OUTPUT);
+  pinMode(A5, OUTPUT);
+  digitalWrite(A4, LOW);
+  digitalWrite(A5, LOW);
+  lcd.print("STOP");
+  myMotor->release(); //try to release the motor during e-stop, but it won't, it just stops running and locks in place.
+    
+}
+
+void setup() {
+
+  attachInterrupt(0, stopper, LOW); //changed 12-9-13 to FALLING because that should effectively debounce the action? //12-11-13 changed back to LOW because it can miss the FALL if it's in the middle of a process so LOW is better.
+  
+  Serial.begin(9600);
+ 
+  pinMode(speedPin, INPUT);
+  
+  pinMode(buttonPin, INPUT);
+  
+  pinMode(estopPin, INPUT);
+  
+  pinMode(tempPin, INPUT);
+  
+  pinMode(13, OUTPUT);
+
+  AFMS.begin();  
+  
+  lcd.begin(16, 2);
+  lcd.setBacklight(RED);
+  
+}
+
+void loop() {
+  
+  /*
+  previous attempt to use while() to act as e-stop didn't work, it seemed:
+  
+  int oops = 0;
+  oops = digitalRead(estopPin);
+  Serial.print(oops);
+  while (oops == HIGH) { //this while statement wraps the whole loop. Limit switches and e-stop switches should go here.
+  */
+  
+  
+//  buttonState = digitalRead(buttonPin);
+  
+  
+  float rawtemp = analogRead(tempPin);
+  float voltage = rawtemp * (5000/1024);
+  float platetemp = voltage / 10;
+  
+  currentButton = debounce(lastButton, buttonPin);
+  
+  if (lastButton == LOW && currentButton == HIGH) {
+       buttonPushCounter++;
+       Serial.println(buttonPushCounter);
+       delay(150); //this delay makes it so it can't keep whipping through all the values as the button is held (useful for stopping on motor release since that takes no time to execute)
+  }
+  
+    if (buttonPushCounter % 5 == 0) { //then release the motor
+      Serial.println("motor released");
+      lcd.setCursor(0,0);
+      lcd.print("motor released");
+      lcd.setCursor(0,1);
+      lcd.print("temp= "); lcd.print(platetemp); lcd.print(" C");
+      myMotor->release(); // stop rotation and turn off holding torque.
+    }
+    
+    if (buttonPushCounter % 5 == 1) { //then go slowly clockwise
+      sensorValue = analogRead(speedPin);
+      int speed;
+      speed = map(sensorValue, 2, 1023, 1, 100);
+//      Serial.print("micro forward actual= ");
+//      float actual = 81.6 + (-424/(5.26+speed));
+//      Serial.print(actual); Serial.println(" um/s");
+//      Serial.print("rpm = "); Serial.println(speed);
+//      lcd.setCursor(0,0);
+//      lcd.print("fwd @ "); lcd.print(actual); lcd.print(" um/s");
+      myMotor->setSpeed(speed);  
+      myMotor->step(1, FORWARD, MICROSTEP);
+    }
+    
+    if (buttonPushCounter % 5 == 2) { //then go slowly counterclockwise
+  sensorValue = analogRead(speedPin);
+      int speed;
+      speed = map(sensorValue, 2, 1023, 1, 100);
+      Serial.print("micro backward ");
+      Serial.println(speed);
+      myMotor->setSpeed(speed);
+      myMotor->step(1, BACKWARD, MICROSTEP);
+    }
+    
+      if (buttonPushCounter % 5 == 3) { //then go fast clockwise
+      sensorValue = analogRead(speedPin);
+      int speed;
+      speed = map(sensorValue, 2, 1023, 1, 100);
+      Serial.print("single forward ");
+      Serial.println(speed);
+      myMotor->setSpeed(speed);  
+      myMotor->step(1, FORWARD, SINGLE);
+    }
+    
+    if (buttonPushCounter % 5 == 4) { //then go fast counterclockwise
+  sensorValue = analogRead(speedPin);
+      int speed;
+      speed = map(sensorValue, 2, 1023, 1, 100);
+      Serial.print("single backward ");
+      Serial.println(speed);
+      myMotor->setSpeed(speed);
+      myMotor->step(1, BACKWARD, SINGLE);
+    }
+
+//} //this is from the while() that could wrap the whole void loop() for e-stopping
+
+}
