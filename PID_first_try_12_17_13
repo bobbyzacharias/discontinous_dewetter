@@ -1,0 +1,75 @@
+/*
+
+12-17-13 
+
+thermometer connected to A3. Pot used to set the setpoint
+connected to A0.
+
+The temperature reading is very erratic. I think Casey's suggestion
+to put a big filter cap on the signal input might be a good idea.
+
+It seems to only hop around when the PID code calls for the heater
+to run, i.e. it's possible it's getting electrical or software
+interference that's affecting its performance rather than the
+thermometer chip itself being bad in some way.
+
+Will need to work on this more tomorrow.
+
+*/
+
+#include <Wire.h>
+#include <PID_v1.h>
+#include <Adafruit_RGBLCDShield.h>
+
+Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
+
+#define RED 0x1
+
+int tempPin = A3;
+int setPin = A0;
+int heaterPWMPin = 6;
+
+//Define Variables we'll be connecting to
+double Setpoint, Input, Output;
+
+//Specify the links and initial tuning parameters
+PID myPID(&Input, &Output, &Setpoint,2,5,1, DIRECT);
+
+void setup()
+{
+  //initialize the variables we're linked to
+  double platetemp;
+  Input = platetemp;
+  Setpoint = 0;
+  
+  pinMode(setPin, INPUT);
+
+  //turn the PID on
+  myPID.SetMode(AUTOMATIC);
+  
+  lcd.begin(16, 2);
+  lcd.setBacklight(RED);
+}
+
+void loop()
+{
+  double rawtemp = analogRead(tempPin);
+  double voltage = rawtemp * (5000/1024);
+  double platetemp = voltage / 10;
+  
+  Setpoint = map(analogRead(setPin), 0, 1024, 0, 40);
+  
+  lcd.setCursor(0,0);
+  lcd.print("set/plate/pwm");
+  lcd.setCursor(0,1);
+  lcd.print(Setpoint); lcd.print("/"); lcd.print(platetemp);
+  lcd.print("/"); lcd.print(Output);
+  
+  Input = platetemp;
+  myPID.Compute();
+  analogWrite(heaterPWMPin, Output);
+  
+  delay(2000);
+ 
+}
+
